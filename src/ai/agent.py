@@ -10,22 +10,13 @@ from langchain.tools import tool
 from sqlalchemy.orm import Session
 from datetime import datetime
 
+# New imports for SerpAPI and DB docs
+from schemas.models import DocumentInDB
+import requests
+
 load_dotenv()
 
-global_db = None
-global_roadmap_id = None
-
-@tool
-def find_tickets_tool(departure_id: str, destination_id: str, start_date: str, end_date: str) -> Any:
-    """Find tickets for a given departure and destination and dates and saves them to the database. departure_id and destination_id are IATA codes. start_date and end_date are dates in the format YYYY-MM-DD"""
-    return find_tickets(global_db, global_roadmap_id, departure_id, destination_id, start_date, end_date)
-
-
-@tool
-def find_activities_tool(destination: str, interests: list) -> str:
-    """Find activities for a given destination and list of interests. Logs to terminal when called."""
-    print(f"[TOOL] find_activities_tool called with: roadmap_id={global_roadmap_id}, destination={destination}, interests={interests}")
-    return f"Activities found in {destination} for interests: {', '.join(interests)}."
+global_db: Optional[Session] = None
 
 class Message(BaseModel):
     role: str
@@ -33,54 +24,114 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: List[Message]
-    roadmap_id: int
 
 class ChatResponse(BaseModel):
     response: str
     tool_output: Optional[Any] = None
 
 class AIAgent:
-    def __init__(self):
+    def __init__(self, model_name: Optional[str] = None):
+        """Initialize the agent with optional custom LLM model."""
+        model_name = model_name or os.environ.get(
+            "GROQ_DEFAULT_MODEL",
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
+        )
+
         self.llm = ChatGroq(
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",
-            temperature=0.7,
+            model=model_name,
+            temperature=float(os.environ.get("LLM_TEMPERATURE", 0.7)),
             groq_api_key=os.environ.get("GROQ_API_KEY"),
         )
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a friendly and helpful travel planning assistant.\nYour goal is to help the user plan a trip by gathering their preferences step-by-step.\n\nAs soon as you have all the information needed for a planning step (like travel dates, hotel preferences, or interests), IMMEDIATELY use the appropriate tool. Do not wait for further user input if you can proceed.\n\nAfter using a tool, confirm with the user and ask for the next missing piece of information.\n\nIf you do not have enough information for a tool, ask the user a clear, specific question to get it.\n\nAlways be friendly and conversational.\n\nExample:\nUser: I want to go to Paris from July 10 to July 15.\nThought: I have the destination and dates. I should find tickets.\nAction: find_tickets_tool(destination='Paris', start_date='2024-07-10', end_date='2024-07-15')\nObservation: Tickets found for Paris from 2024-07-10 to 2024-07-15.\nFinal Answer: I found tickets for Paris from July 10 to July 15! Would you like to look for hotels next?\n\nBased on the user's request, you can:\n1.  Ask for clarifying information if you don't have enough details (e.g., travel dates, hotel preferences, interests).\n2.  Use the available tools if you have all the necessary information for a planning step.\n\nAfter a tool is used successfully, confirm with the user and ask what they'd like to do next. YOU HAVE TO USE TOOLS IF IT IS NEEDED (WHEN SEARCHING FOR TICKETS/HOTLES/FOOD/ACTIVITY). YOU SHOULD CALL 1 TOOL AT A MESSAGE"""),
+            (
+                "system",
+                """You are a helpful assistant for a document management application.\n\nYour tasks include:\n• Answering user questions.\n• Using google_search_tool for up-to-date external information when appropriate.\n• Using knowledge_base_tool to retrieve stored document content when relevant.\n\nThink step-by-step, decide if a tool is needed, then call exactly one tool when useful. Return friendly responses that cite any tool information you used.""",
+            ),
             ("placeholder", "{chat_history}"),
             ("human", "{input}"),
             ("placeholder", "{agent_scratchpad}"),
         ])
 
     async def chat(self, request: ChatRequest, db: Session) -> ChatResponse:
-        global global_db, global_roadmap_id
+        global global_db
         global_db = db
-        global_roadmap_id = request.roadmap_id
-        tools = [find_tickets_tool, find_hotels_tool, find_activities_tool]
+        tools = [google_search_tool, knowledge_base_tool]
         agent = create_tool_calling_agent(self.llm, tools, self.prompt)
         agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, return_intermediate_steps=True)
         chat_history = []
         for msg in request.messages[:-1]:
             chat_history.append(HumanMessage(content=msg.content) if msg.role == "user" else AIMessage(content=msg.content))
         user_input = request.messages[-1].content
-        response = await agent_executor.ainvoke({
-            "input": user_input,
-            "chat_history": chat_history,
-        })
+        response = await agent_executor.ainvoke(
+            {
+                "input": user_input,
+                "chat_history": chat_history,
+            }
+        )
         tool_output = None
         for step in response.get('intermediate_steps', []):
             if isinstance(step, tuple) and len(step) == 2:
                 action, observation = step
                 if isinstance(observation, list) and observation and isinstance(observation[0], dict):
                     tool_output = observation
-                elif isinstance(observation, str) and action.tool in ["find_tickets_tool", "find_hotels_tool", "find_activities_tool"]:
+                elif isinstance(observation, str) and action.tool in ["google_search_tool", "knowledge_base_tool"]:
                     tool_output = observation
         reply = response.get("output", "I'm not sure how to respond to that.")
-        # If tool_output contains segments with both outbound and return, prepend a summary
-        if tool_output and isinstance(tool_output, list) and any('segments' in f for f in tool_output):
-            has_outbound = any(any(seg.get('direction') == 'outbound' for seg in f['segments']) for f in tool_output)
-            has_return = any(any(seg.get('direction') == 'return' for seg in f['segments']) for f in tool_output)
-            if has_outbound and has_return:
-                reply = 'Here are your outbound and return flight options. ' + reply
         return ChatResponse(response=reply, tool_output=tool_output)
+
+# -------------------- Tools --------------------
+
+@tool
+def google_search_tool(query: str, num_results: int = 5) -> List[dict]:
+    """Perform a Google web search using serper.dev API (no external SDK). Requires SERPER_API_KEY env var."""
+    api_key = os.environ.get("SERPER_API_KEY")
+    if not api_key:
+        return [{"error": "SERPER_API_KEY not set"}]
+
+    url = "https://google.serper.dev/search"
+    headers = {
+        "X-API-KEY": api_key,
+        "Content-Type": "application/json",
+    }
+    payload = {"q": query}
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("organic", [])
+        simplified = [
+            {
+                "title": item.get("title"),
+                "link": item.get("link"),
+                "snippet": item.get("snippet"),
+            }
+            for item in results[:num_results]
+        ]
+        return simplified
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+@tool
+def knowledge_base_tool(document_id: int) -> str:
+    """Fetch the full content of a document from the knowledge base by its ID."""
+    if global_db is None:
+        return "No database session available."
+
+    doc = global_db.query(DocumentInDB).filter(DocumentInDB.id == document_id).first()
+    if not doc:
+        return f"Document with id {document_id} not found."
+    return doc.content
+
+def list_groq_models() -> List[str]:
+    """Return available models from Groq API."""
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return []
+    try:
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = requests.get("https://api.groq.com/openai/models", headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return [m["id"] for m in data.get("data", [])]
+    except Exception:
+        return []

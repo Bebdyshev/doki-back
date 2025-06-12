@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Header, Depends, status, Query
+from fastapi import APIRouter, HTTPException, Depends, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from typing import Optional, List
 from ai.agent import AIAgent, ChatRequest, ChatResponse, Message
@@ -7,8 +7,7 @@ import uuid
 from auth_utils import verify_access_token
 from sqlalchemy.orm import Session
 from config import get_db
-from schemas.models import UserInDB, RoadmapInDB, ChatConversation, ChatConversationSchema, ChatMessageSchema
-from tools.toolbelt import TravelToolBelt
+from schemas.models import UserInDB, ChatConversationSchema, ChatMessageSchema, ChatConversation
 from pydantic import BaseModel
 
 class UserChatRequest(BaseModel):
@@ -20,7 +19,6 @@ class ChatApiResponse(BaseModel):
     tool_output: Optional[List[dict]]
 
 router = APIRouter()
-agent = AIAgent()
 conversation_manager = ConversationManager()
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -40,6 +38,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 async def chat(
     request: UserChatRequest,
     conversation_id: Optional[str] = Query(None),
+    model: Optional[str] = Query(None, description="Optional Groq model ID"),
     user: UserInDB = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -55,19 +54,11 @@ async def chat(
         
         context_messages = conversation_manager.get_context(db, user, conversation_id)
         
-        # Find or create a roadmap for the user
-        roadmap = db.query(RoadmapInDB).filter(RoadmapInDB.user_id == user.id).first()
-        if not roadmap:
-            roadmap = RoadmapInDB(user_id=user.id, title=f"Trip for {user.name}", destination="")
-            db.add(roadmap)
-            db.commit()
-            db.refresh(roadmap)
+        # Instantiate agent (allows dynamic model selection)
+        agent = AIAgent(model_name=model)
 
-        # Prepare request for the agent, now including roadmap_id
-        agent_request = ChatRequest(messages=context_messages, roadmap_id=roadmap.id)
-        
-        # Initialize the toolbelt with the db session and roadmap_id
-        toolbelt = TravelToolBelt(db=db, roadmap_id=roadmap.id)
+        # Prepare request for the agent
+        agent_request = ChatRequest(messages=context_messages)
         
         # Get response from the agent
         agent_response = await agent.chat(agent_request, db)
