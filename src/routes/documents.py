@@ -115,6 +115,21 @@ def delete_document(
     return {"detail": "Document deleted"}
 
 
+@router.get("/", response_model=List[DocumentSchema])
+def get_documents(
+    db: Session = Depends(get_db),
+    user: UserInDB = Depends(get_current_user),
+):
+    """Get all documents for the authenticated user."""
+    documents = (
+        db.query(DocumentInDB)
+        .filter(DocumentInDB.user_id == user.id)
+        .order_by(DocumentInDB.updated_at.desc())
+        .all()
+    )
+    return documents
+
+
 # Export helpers
 
 def _html_to_text(html: str) -> str:
