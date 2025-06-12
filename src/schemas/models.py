@@ -42,7 +42,6 @@ class UserInDB(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
-    preferences = relationship("UserPreference", back_populates="user", uselist=False)
     documents = relationship("DocumentInDB", back_populates="user")
 
 class Token(BaseModel):

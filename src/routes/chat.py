@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, status, Query
+from fastapi import APIRouter, HTTPException, Header, Depends, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from typing import Optional, List
 from ai.agent import AIAgent, ChatRequest, ChatResponse, Message
@@ -7,7 +7,7 @@ import uuid
 from auth_utils import verify_access_token
 from sqlalchemy.orm import Session
 from config import get_db
-from schemas.models import UserInDB, ChatConversationSchema, ChatMessageSchema, ChatConversation
+from schemas.models import UserInDB, ChatConversation, ChatConversationSchema, ChatMessageSchema
 from pydantic import BaseModel
 
 class UserChatRequest(BaseModel):

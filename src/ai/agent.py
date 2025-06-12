@@ -13,6 +13,8 @@ from datetime import datetime
 # New imports for SerpAPI and DB docs
 from schemas.models import DocumentInDB
 import requests
+import http.client
+import json
 
 load_dotenv()
 
@@ -43,10 +45,7 @@ class AIAgent:
             groq_api_key=os.environ.get("GROQ_API_KEY"),
         )
         self.prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                """You are a helpful assistant for a document management application.\n\nYour tasks include:\n• Answering user questions.\n• Using google_search_tool for up-to-date external information when appropriate.\n• Using knowledge_base_tool to retrieve stored document content when relevant.\n\nThink step-by-step, decide if a tool is needed, then call exactly one tool when useful. Return friendly responses that cite any tool information you used.""",
-            ),
+            ("system", """You are a helpful AI assistant.\n\nYour primary goals:\n1. Answer user questions conversationally.\n2. When the user needs external information, use the available tools:\n   • google_search_tool — query the web and return concise search results.\n   • knowledge_base_tool — fetch full text of stored documents the user references.\n\nIf you need additional context you don't yet have, explicitly ask the user what you need.\nAlways cite information sources when appropriate and keep answers clear and concise.\nCALL AT MOST ONE TOOL PER MESSAGE when needed."""),
             ("placeholder", "{chat_history}"),
             ("human", "{input}"),
             ("placeholder", "{agent_scratchpad}"),
@@ -79,37 +78,37 @@ class AIAgent:
         reply = response.get("output", "I'm not sure how to respond to that.")
         return ChatResponse(response=reply, tool_output=tool_output)
 
-# -------------------- Tools --------------------
+# -------------------- New Tools --------------------
+
 
 @tool
 def google_search_tool(query: str, num_results: int = 5) -> List[dict]:
-    """Perform a Google web search using serper.dev API (no external SDK). Requires SERPER_API_KEY env var."""
+    """Perform a Google search using Serper.dev REST API. Requires SERPER_API_KEY env var."""
     api_key = os.environ.get("SERPER_API_KEY")
     if not api_key:
         return [{"error": "SERPER_API_KEY not set"}]
 
-    url = "https://google.serper.dev/search"
-    headers = {
-        "X-API-KEY": api_key,
-        "Content-Type": "application/json",
-    }
-    payload = {"q": query}
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        results = data.get("organic", [])
+        conn = http.client.HTTPSConnection("google.serper.dev")
+        payload = json.dumps({"q": query, "num": num_results})
+        headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+        conn.request("POST", "/search", payload, headers)
+        res = conn.getresponse()
+        data = res.read().decode()
+        result_json = json.loads(data)
+        organic = result_json.get("organic", [])
         simplified = [
             {
                 "title": item.get("title"),
                 "link": item.get("link"),
                 "snippet": item.get("snippet"),
             }
-            for item in results[:num_results]
+            for item in organic[:num_results]
         ]
         return simplified
     except Exception as exc:
         return [{"error": str(exc)}]
+
 
 @tool
 def knowledge_base_tool(document_id: int) -> str:
@@ -121,6 +120,7 @@ def knowledge_base_tool(document_id: int) -> str:
     if not doc:
         return f"Document with id {document_id} not found."
     return doc.content
+
 
 def list_groq_models() -> List[str]:
     """Return available models from Groq API."""

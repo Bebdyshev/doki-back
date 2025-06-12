@@ -5,3 +5,9 @@ docker-compose.yml
 .env
 
 _pycache_/
+
+alembic.ini
+
+__pycache__/
+
+.gitignore
