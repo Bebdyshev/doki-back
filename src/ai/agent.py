@@ -18,6 +18,9 @@ import json
 
 load_dotenv()
 
+SERPER_API_KEY = os.environ.get("SERPER_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
 global_db: Optional[Session] = None
 
 class Message(BaseModel):
@@ -63,8 +66,8 @@ class AIAgent:
         user_input = request.messages[-1].content
         response = await agent_executor.ainvoke(
             {
-                "input": user_input,
-                "chat_history": chat_history,
+            "input": user_input,
+            "chat_history": chat_history,
             }
         )
         tool_output = None
@@ -84,7 +87,7 @@ class AIAgent:
 @tool
 def google_search_tool(query: str, num_results: int = 5) -> List[dict]:
     """Perform a Google search using Serper.dev REST API. Requires SERPER_API_KEY env var."""
-    api_key = os.environ.get("SERPER_API_KEY")
+    api_key = SERPER_API_KEY
     if not api_key:
         return [{"error": "SERPER_API_KEY not set"}]
 
