@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Header, Depends, status, Query
 from fastapi.security import OAuth2PasswordBearer
-from typing import Optional, List
+from typing import Optional, List, Any
 from ai.agent import AIAgent, ChatRequest, ChatResponse, Message
 from ai.conversation import ConversationManager
 import uuid
@@ -17,7 +17,7 @@ class UserChatRequest(BaseModel):
 class ChatApiResponse(BaseModel):
     response: str
     conversation_id: str
-    tool_output: Optional[List[dict]]
+    tool_output: Optional[Any] = None
 
 router = APIRouter()
 conversation_manager = ConversationManager()
