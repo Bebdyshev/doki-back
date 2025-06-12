@@ -4,6 +4,7 @@ from typing import Optional, List
 from ai.agent import AIAgent, ChatRequest, ChatResponse, Message
 from ai.conversation import ConversationManager
 import uuid
+import os
 from auth_utils import verify_access_token
 from sqlalchemy.orm import Session
 from config import get_db
@@ -52,7 +53,8 @@ async def chat(
         for message in request.messages:
             conversation_manager.add_message(db, user, conversation_id, message.role, message.content)
         
-        context_messages = conversation_manager.get_context(db, user, conversation_id)
+        max_ctx = int(os.getenv("CHAT_CONTEXT_MESSAGES", 20))
+        context_messages = conversation_manager.get_context(db, user, conversation_id, max_messages=max_ctx)
         
         # Instantiate agent (allows dynamic model selection)
         agent = AIAgent(model_name=model)

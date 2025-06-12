@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 
-from schemas.models import UserInDB
+from schemas.models import UserInDB, UserSchema
 from config import get_db
 from auth_utils import verify_access_token
 from fastapi.security import OAuth2PasswordBearer
@@ -29,14 +29,14 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
 
 
-@router.get("/{user_id}", response_model=UserInDB)
+@router.get("/{user_id}", response_model=UserSchema)
 def get_profile(user_id: int, db: Session = Depends(get_db), user: UserInDB = Depends(get_current_user)):
     if user.id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to view this profile")
     return user
 
 
-@router.put("/{user_id}", response_model=UserInDB)
+@router.put("/{user_id}", response_model=UserSchema)
 def update_profile(
     user_id: int,
     update: UserUpdate,

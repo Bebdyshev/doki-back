@@ -106,3 +106,14 @@ class DocumentSchema(BaseModel):
 
     class Config:
         from_attributes = True
+
+# Pydantic schema for user
+class UserSchema(BaseModel):
+    id: int
+    email: str
+    name: str
+    type: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
